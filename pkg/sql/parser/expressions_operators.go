@@ -335,8 +335,12 @@ func (p *Parser) parseComparisonExpression() (ast.Expression, error) {
 			}, nil
 		}
 
-		// Parse the right side of the expression
-		right, err := p.parsePrimaryExpression()
+		// Parse the right side at the same precedence level as the left
+		// (parseStringConcatExpression), so arithmetic and concatenation in
+		// the RHS parse correctly: `x <> 2 - 1` is `x <> (2 - 1)`, matching
+		// the left operand (line 33) and BETWEEN bounds (line 58). Parsing
+		// the RHS as a bare primary left trailing operators unconsumed.
+		right, err := p.parseStringConcatExpression()
 		if err != nil {
 			return nil, err
 		}

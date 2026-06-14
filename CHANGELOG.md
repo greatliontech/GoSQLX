@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Comparison RHS now parses at full expression precedence.** The right
+  operand of a comparison (`=`, `<>`, `<`, `>`, `<=`, `>=`) was parsed as a
+  bare primary (`parsePrimaryExpression`), while the left operand and BETWEEN
+  bounds used `parseStringConcatExpression`. The asymmetry left trailing
+  arithmetic / `||` operators unconsumed, so valid SQL like `x <> 2 - 1`
+  failed with "expected statement, got MINUS". The RHS now uses
+  `parseStringConcatExpression`, matching the left operand, so `x <> 2 - 1`
+  parses as `x <> (2 - 1)`. Strictly more permissive — no previously-valid
+  input changes. Regression test: `TestParser_ComparisonRHSArithmetic`.
+
 ## [1.14.0] - 2026-04-12 — Dialect-Aware Transforms, Snowflake 100%, Schema Introspection
 
 Headline themes: dialect-aware transforms, Snowflake at 100% of the QA corpus, ClickHouse significantly expanded (83% of the QA corpus, up from 53%), live schema introspection, SQL transpilation, and first-class integration sub-modules (OpenTelemetry and GORM). Drop-in upgrade from v1.13.0 — no breaking changes.

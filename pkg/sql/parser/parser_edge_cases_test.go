@@ -725,6 +725,47 @@ func TestParseArithmeticPrecedence_EdgeCases(t *testing.T) {
 	}
 }
 
+// TestParser_ComparisonRHSArithmetic pins that the right operand of a
+// comparison parses at full expression precedence (arithmetic and string
+// concatenation), not as a bare primary. Regression for the bug where
+// `x <> 2 - 1` parsed `x <> 2` and left `- 1` unconsumed ("expected
+// statement, got MINUS"): the RHS was parsed with parsePrimaryExpression
+// instead of parseStringConcatExpression — the level used for the LHS
+// (parseComparisonExpression line 33) and BETWEEN bounds. Each case below
+// errored before the fix.
+func TestParser_ComparisonRHSArithmetic(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{"subtraction RHS", "SELECT * FROM t WHERE x <> 2 - 1"},
+		{"addition RHS", "SELECT * FROM t WHERE x > 2 + 3"},
+		{"mul then sub RHS", "SELECT * FROM t WHERE x = 10 * 2 - 1"},
+		{"column arithmetic RHS", "SELECT * FROM t WHERE x < a + b"},
+		{"parenthesized RHS still works", "SELECT * FROM t WHERE x <> (2 - 1)"},
+		{"concatenation RHS", "SELECT * FROM t WHERE name = 'a' || 'b'"},
+		{"addition on both sides", "SELECT * FROM t WHERE a + 1 = b + 2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens := tokenizeSQL(t, tt.sql)
+
+			p := NewParser()
+			astObj := ast.NewAST()
+			defer ast.ReleaseAST(astObj)
+
+			result, err := p.Parse(tokens)
+			if err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+			if result == nil || len(result.Statements) == 0 {
+				t.Fatal("expected a parsed statement, got nil or empty")
+			}
+		})
+	}
+}
+
 // TestParseDoubleQuotedIdentifiers_EdgeCases tests double-quoted identifiers
 func TestParseDoubleQuotedIdentifiers_EdgeCases(t *testing.T) {
 	tests := []struct {
