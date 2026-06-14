@@ -666,6 +666,19 @@ func releaseStatement(stmt Statement) {
 		PutUpdateStatement(s)
 	case *DeleteStatement:
 		PutDeleteStatement(s)
+	case *SetOperation:
+		// A set operation owns its two operands; release both so their
+		// pooled sub-nodes (expressions, CTE bodies, subqueries) return to
+		// their pools. N-arm chains nest on the left spine, so this
+		// recurses the whole chain. SetOperation is heap-allocated (not
+		// pooled) — release the children and drop the links. Without this
+		// case every set-op query silently leaked its operands' pooled
+		// nodes (the same un-dispatched-pooled-statement class fixed above
+		// for the sequence statements).
+		releaseStatement(s.Left)
+		releaseStatement(s.Right)
+		s.Left = nil
+		s.Right = nil
 	case *CreateTableStatement:
 		PutCreateTableStatement(s)
 	case *AlterTableStatement:

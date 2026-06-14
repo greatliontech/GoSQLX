@@ -81,3 +81,77 @@ func TestParser_WithRetainedOnMultiArmSetOpChain(t *testing.T) {
 		})
 	}
 }
+
+// Releasing a set-operation chain must return its operand SELECTs — and
+// their nested pooled nodes — to the pools. releaseStatement now
+// dispatches *SetOperation; without it every set-op query silently leaked
+// its operands (releaseStatement fell through to a no-op).
+func TestReleaseAST_SetOpChainReleasesOperands(t *testing.T) {
+	cases := []string{
+		`SELECT 1 UNION ALL SELECT 2`,
+		`SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3`,
+		`WITH x AS (SELECT 1 AS n) SELECT * FROM x UNION ALL SELECT 2 UNION ALL SELECT 3`,
+		`WITH y AS (SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3) SELECT * FROM y`, // set-op as CTE body
+		// The same dispatcher fixes set-ops embedded elsewhere — every
+		// holder of a possibly-set-op statement routes through
+		// releaseStatement: IN/EXISTS subqueries and INSERT ... SELECT.
+		// These were leaking pre-fix too (top statement isn't a chain, so
+		// the guard-probe is skipped; the no-double-release check covers
+		// them).
+		`SELECT * FROM t WHERE x IN (SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3)`,
+		`SELECT * FROM t WHERE EXISTS (SELECT 1 UNION ALL SELECT 2)`,
+		`INSERT INTO t SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3`,
+	}
+	for _, sql := range cases {
+		t.Run(sql, func(t *testing.T) {
+			ast.ResetPoolDoubleReleaseCount()
+
+			tkz := tokenizer.GetTokenizer()
+			tokens, err := tkz.Tokenize([]byte(sql))
+			tokenizer.PutTokenizer(tkz)
+			if err != nil {
+				t.Fatalf("tokenize: %v", err)
+			}
+			parser := &Parser{}
+			astObj, err := parser.ParseFromModelTokens(tokens)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+
+			// Capture the innermost left operand SELECT when the top
+			// statement is a chain, so we can prove it was released.
+			var captured *ast.SelectStatement
+			if setOp, ok := astObj.Statements[0].(*ast.SetOperation); ok {
+				cur := setOp
+				for {
+					if s, ok := cur.Left.(*ast.SelectStatement); ok {
+						captured = s
+						break
+					}
+					n, ok := cur.Left.(*ast.SetOperation)
+					if !ok {
+						break
+					}
+					cur = n
+				}
+			}
+
+			ast.ReleaseAST(astObj)
+			if c := ast.PoolDoubleReleaseCount(); c != 0 {
+				t.Fatalf("ReleaseAST double-released %d node(s)", c)
+			}
+
+			// Prove the operand was actually released: a second release is
+			// REFUSED (the guard is armed). On the pre-fix code the operand
+			// was never released, so this would SUCCEED and the count stay
+			// 0 — exactly the leak the dispatch fixes.
+			if captured != nil {
+				ast.ResetPoolDoubleReleaseCount()
+				ast.PutSelectStatement(captured)
+				if ast.PoolDoubleReleaseCount() == 0 {
+					t.Fatal("operand SELECT was NOT released by ReleaseAST (leak)")
+				}
+			}
+		})
+	}
+}
