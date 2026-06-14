@@ -84,9 +84,30 @@ func (p *Parser) parseWithStatement() (ast.Statement, error) {
 		stmt.With = withClause
 		return stmt, nil
 	case *ast.SetOperation:
-		// For set operations, attach WITH to the left statement if it's a SELECT
-		if leftSelect, ok := stmt.Left.(*ast.SelectStatement); ok {
-			leftSelect.With = withClause
+		// A WITH clause prefixing a set-operation chain scopes its CTEs
+		// over the ENTIRE chain (standard SQL: the WITH is part of the
+		// query expression). N-arm chains are built left-associatively as
+		// SetOperation{Left: SetOperation{...}, Right: SELECT}, so the
+		// WITH belongs on the INNERMOST left SELECT — where the 2-arm form
+		// already carries it. Walk the left spine to find it; checking only
+		// the immediate Left silently dropped the clause on 3+-arm chains.
+		cur := stmt
+		for {
+			if leftSelect, ok := cur.Left.(*ast.SelectStatement); ok {
+				leftSelect.With = withClause
+				break
+			}
+			nested, ok := cur.Left.(*ast.SetOperation)
+			if !ok {
+				// Unreachable today: parseSelectWithSetOperations builds
+				// every operand directly from parseSelectStatement, so a
+				// chain's left spine is SetOperations bottoming out at a
+				// SELECT. Defensive — if a parenthesised query-expression
+				// operand is ever added, dropping the WITH here would
+				// re-introduce the silent-CTE-loss bug class.
+				break
+			}
+			cur = nested
 		}
 		return stmt, nil
 	case *ast.InsertStatement:
